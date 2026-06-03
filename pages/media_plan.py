@@ -164,8 +164,10 @@ BENCH_HELP = {
     'conv_rate':            '% of sessions that convert to a lead. Typical B2B range: 1–5%.',
     'lead_to_mql':          '% of raw leads that qualify as Marketing Qualified Leads. Typical B2B: 15–35%.',
     'mql_to_sql':           '% of MQLs accepted by sales as Sales Qualified Leads. Typical B2B: 20–40%.',
-    'open_rate':            'Sponsored Message: % of sends that are opened by the recipient.',
+    'open_rate':            'Sponsored Message / Conversation Ad: % of sends that are opened.',
     'form_completion_rate': 'Lead Gen Form: % of ad clicks that complete and submit the LinkedIn form.',
+    'doc_open_rate':        'Document Ad: % of ad clicks that open and start reading the document.',
+    'doc_completion_rate':  'Document Ad: % of document openers who scroll to the end.',
 }
 
 DONUT_PALETTE = ['#2BB5A5','#1F497D','#4DB896','#437CA3','#5A3E7A','#E8A838','#8B3A3A','#6B7280',
@@ -173,7 +175,8 @@ DONUT_PALETTE = ['#2BB5A5','#1F497D','#4DB896','#437CA3','#5A3E7A','#E8A838','#8
 
 ADDITIVE = ['Budget', 'impressions', 'reach', 'views', 'clicks', 'sessions',
             'conversions', 'mql', 'sql',
-            'sends', 'opens', 'cta_clicks', 'form_completions']
+            'sends', 'opens', 'cta_clicks', 'form_completions',
+            'doc_views', 'doc_completions']
 
 COL_FMT = {
     'Budget':           ('Spent (€)',        lambda x: f'€{x:,.0f}'),
@@ -208,6 +211,10 @@ COL_FMT = {
     'cost_per_send':        ('Cost per Send (€)',      lambda x: f'€{x:.4f}'),
     'cost_per_open':        ('Cost per Open (€)',      lambda x: f'€{x:.4f}'),
     'cta_ctr':              ('CTA CTR',                lambda x: f'{x*100:.2f}%'),
+    'doc_views':            ('Doc Views',              lambda x: f'{int(round(x)):,}'),
+    'doc_open_rate':        ('Doc Open Rate',          lambda x: f'{x*100:.1f}%'),
+    'doc_completions':      ('Doc Completions',        lambda x: f'{int(round(x)):,}'),
+    'doc_completion_rate':  ('Doc Completion %',       lambda x: f'{x*100:.1f}%'),
 }
 
 # Columns shown per (channel, goal), in the exact order the user specified.
@@ -236,6 +243,26 @@ PHASE_COLS = {
                                     'open_rate', 'cta_clicks', 'ctr'],
     ('LinkedIn_SM', 'Conversion'): ['Budget', 'sends', 'cost_per_send', 'opens', 'cost_per_open',
                                     'open_rate', 'cta_clicks', 'ctr',
+                                    'conversions', 'cpa',
+                                    'lead_to_mql', 'mql', 'cost_per_mql',
+                                    'mql_to_sql', 'sql', 'cost_per_sql'],
+    # LinkedIn Conversation Ad — same metric structure as Sponsored Message
+    ('LinkedIn_CA', 'Awareness'):  ['Budget', 'sends', 'cost_per_send', 'opens', 'cost_per_open',
+                                    'open_rate', 'cta_clicks', 'ctr'],
+    ('LinkedIn_CA', 'Traffic'):    ['Budget', 'sends', 'cost_per_send', 'opens', 'cost_per_open',
+                                    'open_rate', 'cta_clicks', 'ctr'],
+    ('LinkedIn_CA', 'Conversion'): ['Budget', 'sends', 'cost_per_send', 'opens', 'cost_per_open',
+                                    'open_rate', 'cta_clicks', 'ctr',
+                                    'conversions', 'cpa',
+                                    'lead_to_mql', 'mql', 'cost_per_mql',
+                                    'mql_to_sql', 'sql', 'cost_per_sql'],
+    # LinkedIn Document Ad
+    ('LinkedIn_DA', 'Awareness'):  ['Budget', 'impressions', 'eff_cpm', 'clicks', 'ctr',
+                                    'doc_views', 'doc_open_rate', 'doc_completions', 'doc_completion_rate'],
+    ('LinkedIn_DA', 'Traffic'):    ['Budget', 'impressions', 'eff_cpm', 'clicks', 'ctr',
+                                    'doc_views', 'doc_open_rate', 'doc_completions', 'doc_completion_rate'],
+    ('LinkedIn_DA', 'Conversion'): ['Budget', 'impressions', 'eff_cpm', 'clicks', 'ctr',
+                                    'doc_views', 'doc_open_rate', 'doc_completions', 'doc_completion_rate',
                                     'conversions', 'cpa',
                                     'lead_to_mql', 'mql', 'cost_per_mql',
                                     'mql_to_sql', 'sql', 'cost_per_sql'],
@@ -316,7 +343,8 @@ def calc_row(budget, bm, goal, channel, conv_rate):
             r['sql']          = sql
             r['cost_per_sql'] = budget / sql if sql > 0 else 0
 
-    elif channel == 'LinkedIn' and bm.get('_li_format') == 'Sponsored Message / Conversational Ad':
+    elif channel == 'LinkedIn' and bm.get('_li_format') in (
+            'Sponsored Message / Conversational Ad', 'Conversation Ad'):
         # Everything stays inside LinkedIn — no sessions metric
         cps       = bm.get('cpm', 0.50)    # repurposed field: cost per send
         open_rate = bm.get('open_rate', 0.30)
@@ -343,6 +371,43 @@ def calc_row(budget, bm, goal, channel, conv_rate):
             r['conv_rate']   = c2l
             r['cpa']         = budget / convs if convs > 0 else 0
             l2m = bm.get('lead_to_mql', 0.20)
+            m2s = bm.get('mql_to_sql',  0.30)
+            mql = convs * l2m
+            sql = mql * m2s
+            r['lead_to_mql']  = l2m
+            r['mql']          = mql
+            r['cost_per_mql'] = budget / mql if mql > 0 else 0
+            r['mql_to_sql']   = m2s
+            r['sql']          = sql
+            r['cost_per_sql'] = budget / sql if sql > 0 else 0
+
+    elif channel == 'LinkedIn' and bm.get('_li_format') == 'Document Ad':
+        cpm             = bm.get('cpm', 12.0)
+        ctr             = bm.get('ctr', 0.004)
+        doc_open_rate   = bm.get('doc_open_rate', 0.70)
+        doc_comp_rate   = bm.get('doc_completion_rate', 0.40)
+        if cpm <= 0:
+            return r
+        imp             = (budget / cpm) * 1000
+        clicks          = imp * ctr
+        doc_views       = clicks * doc_open_rate
+        doc_completions = doc_views * doc_comp_rate
+        r.update({
+            'impressions':         imp,
+            'clicks':              clicks,
+            'ctr':                 ctr,
+            'doc_views':           doc_views,
+            'doc_open_rate':       doc_open_rate,
+            'doc_completions':     doc_completions,
+            'doc_completion_rate': doc_comp_rate,
+        })
+        if goal == 'Conversion':
+            c2l = bm.get('conv_rate', 0.08)   # doc completion → lead (via attached LGF)
+            convs = doc_completions * c2l
+            r['conversions'] = convs
+            r['conv_rate']   = c2l
+            r['cpa']         = budget / convs if convs > 0 else 0
+            l2m = bm.get('lead_to_mql', 0.40)
             m2s = bm.get('mql_to_sql',  0.30)
             mql = convs * l2m
             sql = mql * m2s
@@ -478,12 +543,21 @@ def make_funnel(df, goal, channel, title, li_format=None):
             stages = [('Impressions', 'impressions'), ('Clicks', 'clicks'), ('Sessions', 'sessions')]
         else:
             stages = [('Impressions', 'impressions'), ('Clicks', 'clicks'), ('Sessions', 'sessions'), ('Conversions', 'conversions')]
-    elif channel == 'LinkedIn' and li_format == 'Sponsored Message / Conversational Ad':
+    elif channel == 'LinkedIn' and li_format in (
+            'Sponsored Message / Conversational Ad', 'Conversation Ad'):
         if goal == 'Conversion':
             stages = [('Sends', 'sends'), ('Opens', 'opens'), ('CTA Clicks', 'cta_clicks'),
                       ('Leads', 'conversions'), ('MQLs', 'mql'), ('SQLs', 'sql')]
         else:
             stages = [('Sends', 'sends'), ('Opens', 'opens'), ('CTA Clicks', 'cta_clicks')]
+    elif channel == 'LinkedIn' and li_format == 'Document Ad':
+        if goal == 'Conversion':
+            stages = [('Impressions', 'impressions'), ('Clicks', 'clicks'),
+                      ('Doc Views', 'doc_views'), ('Doc Completions', 'doc_completions'),
+                      ('Leads', 'conversions'), ('MQLs', 'mql'), ('SQLs', 'sql')]
+        else:
+            stages = [('Impressions', 'impressions'), ('Clicks', 'clicks'),
+                      ('Doc Views', 'doc_views'), ('Doc Completions', 'doc_completions')]
     elif channel == 'LinkedIn' and li_format == 'Lead Gen Form':
         if goal == 'Conversion':
             stages = [('Impressions', 'impressions'), ('Clicks', 'clicks'),
@@ -612,10 +686,25 @@ def _apply_bench_preset(ch, mkt, goal, sid, preset_name, li_fmt=None):
         ]
     elif ch == 'LinkedIn' and li_fmt == 'Sponsored Message / Conversational Ad':
         keys = [
-            (f'cpm_{mkt}_{ch}_{goal}_{sid}',       round(b['cpm'] * f['cpm'] * 0.05, 3)),  # cost per send ~5% of CPM
+            (f'cpm_{mkt}_{ch}_{goal}_{sid}',       round(b['cpm'] * f['cpm'] * 0.05, 3)),
             (f'open_rate_{mkt}_{ch}_{goal}_{sid}', round(30.0 * f.get('ctr', 1.0), 1)),
             (f'ctr_{mkt}_{ch}_{goal}_{sid}',       round(b['ctr'] * 100 * f['ctr'], 2)),
-            (f'conv_rate_{mkt}_{ch}_{goal}_{sid}', round(5.0 * f['conv_rate'], 1)),  # CTA click→lead
+            (f'conv_rate_{mkt}_{ch}_{goal}_{sid}', round(5.0 * f['conv_rate'], 1)),
+        ]
+    elif ch == 'LinkedIn' and li_fmt == 'Conversation Ad':
+        keys = [
+            (f'cpm_{mkt}_{ch}_{goal}_{sid}',       round(b['cpm'] * f['cpm'] * 0.04, 3)),  # slightly cheaper than SM
+            (f'open_rate_{mkt}_{ch}_{goal}_{sid}', round(45.0 * f.get('ctr', 1.0), 1)),
+            (f'ctr_{mkt}_{ch}_{goal}_{sid}',       round(b['ctr'] * 100 * f['ctr'], 2)),
+            (f'conv_rate_{mkt}_{ch}_{goal}_{sid}', round(6.0 * f['conv_rate'], 1)),
+        ]
+    elif ch == 'LinkedIn' and li_fmt == 'Document Ad':
+        keys = [
+            (f'cpm_{mkt}_{ch}_{goal}_{sid}',                  round(b['cpm'] * f['cpm'], 2)),
+            (f'ctr_{mkt}_{ch}_{goal}_{sid}',                  round(b['ctr'] * 100 * f['ctr'], 2)),
+            (f'doc_open_rate_{mkt}_{ch}_{goal}_{sid}',        round(70.0 * f.get('ctr', 1.0), 1)),
+            (f'doc_completion_rate_{mkt}_{ch}_{goal}_{sid}',  round(40.0 * f.get('conv_rate', 1.0), 1)),
+            (f'conv_rate_{mkt}_{ch}_{goal}_{sid}',            round(8.0 * f['conv_rate'], 1)),
         ]
     elif ch == 'LinkedIn' and li_fmt == 'Lead Gen Form':
         keys = [
@@ -646,6 +735,12 @@ _BENCH_FIELDS = {
     ('LinkedIn_SM',   'Awareness'):  ['cpm', 'open_rate', 'ctr'],
     ('LinkedIn_SM',   'Traffic'):    ['cpm', 'open_rate', 'ctr'],
     ('LinkedIn_SM',   'Conversion'): ['cpm', 'open_rate', 'ctr', 'conv_rate', 'lead_to_mql', 'mql_to_sql'],
+    ('LinkedIn_CA',   'Awareness'):  ['cpm', 'open_rate', 'ctr'],
+    ('LinkedIn_CA',   'Traffic'):    ['cpm', 'open_rate', 'ctr'],
+    ('LinkedIn_CA',   'Conversion'): ['cpm', 'open_rate', 'ctr', 'conv_rate', 'lead_to_mql', 'mql_to_sql'],
+    ('LinkedIn_DA',   'Awareness'):  ['cpm', 'ctr', 'doc_open_rate', 'doc_completion_rate'],
+    ('LinkedIn_DA',   'Traffic'):    ['cpm', 'ctr', 'doc_open_rate', 'doc_completion_rate'],
+    ('LinkedIn_DA',   'Conversion'): ['cpm', 'ctr', 'doc_open_rate', 'doc_completion_rate', 'conv_rate', 'lead_to_mql', 'mql_to_sql'],
     ('LinkedIn_LGF',  'Awareness'):  ['cpm', 'ctr', 'form_completion_rate'],
     ('LinkedIn_LGF',  'Traffic'):    ['cpm', 'ctr', 'form_completion_rate'],
     ('LinkedIn_LGF',  'Conversion'): ['cpm', 'ctr', 'form_completion_rate', 'lead_to_mql', 'mql_to_sql'],
@@ -667,8 +762,10 @@ _BENCH_FIELD_DESC = {
     'conv_rate':            'Session-to-lead conversion rate as decimal proportion (e.g. 0.02 for 2%)',
     'lead_to_mql':          'Lead-to-MQL rate as decimal proportion (e.g. 0.20 for 20%)',
     'mql_to_sql':           'MQL-to-SQL rate as decimal proportion (e.g. 0.30 for 30%)',
-    'open_rate':            'Sponsored Message open rate as decimal proportion (e.g. 0.30 for 30%)',
+    'open_rate':            'Sponsored/Conversation Message open rate as decimal proportion (e.g. 0.35 for 35%)',
     'form_completion_rate': 'Lead Gen Form completion rate as decimal proportion (e.g. 0.10 for 10%)',
+    'doc_open_rate':        'Document Ad: % of clicks that open the doc, as decimal (e.g. 0.70 for 70%)',
+    'doc_completion_rate':  'Document Ad: % of openers who read to the end, as decimal (e.g. 0.40 for 40%)',
 }
 
 _PRESET_DESC = {
@@ -678,7 +775,7 @@ _PRESET_DESC = {
 }
 
 _BENCH_IS_PCT = {'ctr', 'view_rate', 'click_to_session', 'conv_rate', 'lead_to_mql', 'mql_to_sql',
-                 'open_rate', 'form_completion_rate'}
+                 'open_rate', 'form_completion_rate', 'doc_open_rate', 'doc_completion_rate'}
 
 
 def get_api_key():
@@ -703,6 +800,10 @@ def _apply_bench_preset_ai(ch, mkt, goal, sid, preset_name, audience, industry, 
     # Choose the right field list based on LinkedIn format
     if ch == 'LinkedIn' and li_fmt == 'Sponsored Message / Conversational Ad':
         bench_key = ('LinkedIn_SM', goal)
+    elif ch == 'LinkedIn' and li_fmt == 'Conversation Ad':
+        bench_key = ('LinkedIn_CA', goal)
+    elif ch == 'LinkedIn' and li_fmt == 'Document Ad':
+        bench_key = ('LinkedIn_DA', goal)
     elif ch == 'LinkedIn' and li_fmt == 'Lead Gen Form':
         bench_key = ('LinkedIn_LGF', goal)
     else:
@@ -837,6 +938,7 @@ def _pacing_chart(periods, budget, sid):
 _LI_ALL_BENCH_KEYS = [
     'cpm', 'ctr', 'frequency', 'click_to_session', 'conv_rate',
     'lead_to_mql', 'mql_to_sql', 'open_rate', 'form_completion_rate',
+    'doc_open_rate', 'doc_completion_rate',
 ]
 
 def _clear_li_bench_keys(mkt, goal, sid):
@@ -851,6 +953,8 @@ _LI_FORMATS = [
     'Video',
     'Carousel',
     'Sponsored Message / Conversational Ad',
+    'Conversation Ad',
+    'Document Ad',
     'Lead Gen Form',
 ]
 
@@ -939,6 +1043,31 @@ def benchmark_inputs(ch, mkt, goal, sid=0):
                     ('lead_to_mql', 'Lead→MQL %',       b.get('lead_to_mql', 0.20) * 100, 1.0, '%.0f', True),
                     ('mql_to_sql',  'MQL→SQL %',        b.get('mql_to_sql',  0.30) * 100, 1.0, '%.0f', True),
                 ]
+        elif li_fmt == 'Conversation Ad':
+            fields = [
+                ('cpm',       'Cost per Send (€)', b.get('cpm', 0.40), 0.01, '%.3f', False),
+                ('open_rate', 'Open Rate %',        45.0,               0.5,  '%.1f', True),
+                ('ctr',       'CTA Click Rate %',   b['ctr'] * 100,     0.1,  '%.2f', True),
+            ]
+            if goal == 'Conversion':
+                fields += [
+                    ('conv_rate',   'CTA Click→Lead %', 6.0,                              0.1, '%.1f', True),
+                    ('lead_to_mql', 'Lead→MQL %',       b.get('lead_to_mql', 0.20) * 100, 1.0, '%.0f', True),
+                    ('mql_to_sql',  'MQL→SQL %',        b.get('mql_to_sql',  0.30) * 100, 1.0, '%.0f', True),
+                ]
+        elif li_fmt == 'Document Ad':
+            fields = [
+                ('cpm',                 'CPM (€)',                b['cpm'],   0.1,  '%.2f', False),
+                ('ctr',                 'CTR %',                  b['ctr'] * 100, 0.01, '%.3f', True),
+                ('doc_open_rate',       'Doc Open Rate %',        70.0,       1.0,  '%.0f', True),
+                ('doc_completion_rate', 'Doc Completion Rate %',  40.0,       1.0,  '%.0f', True),
+            ]
+            if goal == 'Conversion':
+                fields += [
+                    ('conv_rate',   'Doc Completion→Lead %', 8.0,                              0.1, '%.1f', True),
+                    ('lead_to_mql', 'Lead→MQL %',            b.get('lead_to_mql', 0.40) * 100, 1.0, '%.0f', True),
+                    ('mql_to_sql',  'MQL→SQL %',             b.get('mql_to_sql',  0.30) * 100, 1.0, '%.0f', True),
+                ]
         elif li_fmt == 'Lead Gen Form':
             fields = [
                 ('cpm',                  'CPM (€)',                 b['cpm'],                         0.1,  '%.2f', False),
@@ -999,7 +1128,9 @@ def benchmark_inputs(ch, mkt, goal, sid=0):
         bm['view_rate'] = b.get('view_rate', 0.31)
     if ch in ('YouTube', 'Display') and 'frequency' not in bm:
         bm['frequency'] = b.get('frequency', 4.0 if ch == 'Display' else 3.0)
-    if ch == 'LinkedIn' and li_fmt not in ('Sponsored Message / Conversational Ad', 'Lead Gen Form'):
+    _li_no_freq = ('Sponsored Message / Conversational Ad', 'Conversation Ad',
+                   'Lead Gen Form', 'Document Ad')
+    if ch == 'LinkedIn' and li_fmt not in _li_no_freq:
         if 'frequency' not in bm:
             bm['frequency'] = b.get('frequency', 3.0)
     if 'click_to_session' not in bm:
@@ -1169,6 +1300,17 @@ def _get_bm_ss(ch, mkt, goal, sid):
             bm['open_rate'] = _pct('open_rate', 0.30)
             bm['ctr']       = _pct('ctr', b['ctr'])
             bm['conv_rate'] = _pct('conv_rate', 0.05)
+        elif li_fmt == 'Conversation Ad':
+            bm['cpm']       = ss.get(f'cpm_{mkt}_{ch}_{goal}_{sid}', b.get('cpm', 0.40))
+            bm['open_rate'] = _pct('open_rate', 0.45)
+            bm['ctr']       = _pct('ctr', b['ctr'])
+            bm['conv_rate'] = _pct('conv_rate', 0.06)
+        elif li_fmt == 'Document Ad':
+            bm['cpm']                  = ss.get(f'cpm_{mkt}_{ch}_{goal}_{sid}', b['cpm'])
+            bm['ctr']                  = _pct('ctr', b['ctr'])
+            bm['doc_open_rate']        = _pct('doc_open_rate', 0.70)
+            bm['doc_completion_rate']  = _pct('doc_completion_rate', 0.40)
+            bm['conv_rate']            = _pct('conv_rate', 0.08)
         elif li_fmt == 'Lead Gen Form':
             bm['cpm']                  = ss.get(f'cpm_{mkt}_{ch}_{goal}_{sid}', b['cpm'])
             bm['ctr']                  = _pct('ctr', b['ctr'])
@@ -1236,13 +1378,15 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
 
     _PCT_KEYS  = {'ctr', 'view_rate', 'click_to_session', 'conv_rate',
                   'lead_to_mql', 'mql_to_sql', 'cvr',
-                  'open_rate', 'form_completion_rate'}
+                  'open_rate', 'form_completion_rate',
+                  'doc_open_rate', 'doc_completion_rate'}
     _EUR_KEYS  = {'Budget', 'cpc', 'cpa', 'cpv', 'eff_cpm',
                   'cost_per_mql', 'cost_per_sql',
                   'cost_per_send', 'cost_per_open'}
     _ADDITIVE  = {'Budget', 'impressions', 'reach', 'views', 'clicks',
                   'sessions', 'conversions', 'mql', 'sql',
-                  'sends', 'opens', 'cta_clicks', 'form_completions'}
+                  'sends', 'opens', 'cta_clicks', 'form_completions',
+                  'doc_views', 'doc_completions'}
     # Rate cols whose scenario-total value is derived from summed additive cols (standard path)
     _RATE_FROM = {
         'ctr':              ('clicks',      'impressions'),
@@ -1260,9 +1404,17 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
         'mql_to_sql': ('sql',         'mql'),
     }
     _RATE_FROM_LGF = {
-        'ctr':                  ('clicks',          'impressions'),
+        'ctr':                  ('clicks',           'impressions'),
         'form_completion_rate': ('form_completions', 'clicks'),
         'lead_to_mql':          ('mql',              'form_completions'),
+        'mql_to_sql':           ('sql',              'mql'),
+    }
+    _RATE_FROM_DA = {
+        'ctr':                  ('clicks',          'impressions'),
+        'doc_open_rate':        ('doc_views',        'clicks'),
+        'doc_completion_rate':  ('doc_completions',  'doc_views'),
+        'conv_rate':            ('conversions',      'doc_completions'),
+        'lead_to_mql':          ('mql',              'conversions'),
         'mql_to_sql':           ('sql',              'mql'),
     }
 
@@ -1281,6 +1433,12 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
         ('LinkedIn_SM',   'Awareness'):   ['cpm', 'open_rate', 'ctr'],
         ('LinkedIn_SM',   'Traffic'):     ['cpm', 'open_rate', 'ctr'],
         ('LinkedIn_SM',   'Conversion'):  ['cpm', 'open_rate', 'ctr', 'conv_rate', 'lead_to_mql', 'mql_to_sql'],
+        ('LinkedIn_CA',   'Awareness'):   ['cpm', 'open_rate', 'ctr'],
+        ('LinkedIn_CA',   'Traffic'):     ['cpm', 'open_rate', 'ctr'],
+        ('LinkedIn_CA',   'Conversion'):  ['cpm', 'open_rate', 'ctr', 'conv_rate', 'lead_to_mql', 'mql_to_sql'],
+        ('LinkedIn_DA',   'Awareness'):   ['cpm', 'ctr', 'doc_open_rate', 'doc_completion_rate'],
+        ('LinkedIn_DA',   'Traffic'):     ['cpm', 'ctr', 'doc_open_rate', 'doc_completion_rate'],
+        ('LinkedIn_DA',   'Conversion'):  ['cpm', 'ctr', 'doc_open_rate', 'doc_completion_rate', 'conv_rate', 'lead_to_mql', 'mql_to_sql'],
         ('LinkedIn_LGF',  'Awareness'):   ['cpm', 'ctr', 'form_completion_rate'],
         ('LinkedIn_LGF',  'Traffic'):     ['cpm', 'ctr', 'form_completion_rate'],
         ('LinkedIn_LGF',  'Conversion'):  ['cpm', 'ctr', 'form_completion_rate', 'lead_to_mql', 'mql_to_sql'],
@@ -1296,13 +1454,15 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
         'ctr': 'CTR / CTA Click Rate', 'frequency': 'Frequency',
         'click_to_session': 'Click→Session', 'open_rate': 'Open Rate',
         'form_completion_rate': 'Form Completion Rate',
-        'conv_rate': 'Session→Lead % / CTA→Lead %',
+        'conv_rate': 'Session→Lead % / CTA→Lead % / Doc→Lead %',
         'lead_to_mql': 'Lead→MQL %', 'mql_to_sql': 'MQL→SQL %',
+        'doc_open_rate': 'Doc Open Rate', 'doc_completion_rate': 'Doc Completion Rate',
     }
     _BM_NUM_FMT = {
         'cpm': '#,##0.0000', 'cpc': '#,##0.00', 'view_rate': '0.00%',
         'ctr': '0.00%', 'frequency': '0.0', 'click_to_session': '0%',
         'open_rate': '0.0%', 'form_completion_rate': '0.0%',
+        'doc_open_rate': '0.0%', 'doc_completion_rate': '0.0%',
         'conv_rate': '0.00%', 'lead_to_mql': '0%', 'mql_to_sql': '0%',
     }
 
@@ -1314,8 +1474,9 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
 
         if key == 'Budget':       return None
 
-        # ── LinkedIn Sponsored Message ─────────────────────────────────────────
-        if ch == 'LinkedIn' and li_fmt == 'Sponsored Message / Conversational Ad':
+        # ── LinkedIn Sponsored Message / Conversation Ad ──────────────────────
+        if ch == 'LinkedIn' and li_fmt in (
+                'Sponsored Message / Conversational Ad', 'Conversation Ad'):
             if key == 'sends':            return ie(f"{ref('Budget')}/{bm('cpm')}")
             if key == 'cost_per_send':    return ie(f"{ref('Budget')}/{ref('sends')}")
             if key == 'opens':            return ie(f"{ref('sends')}*{bm('open_rate')}")
@@ -1332,6 +1493,27 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
             if key == 'mql_to_sql':       return f"={bm('mql_to_sql')}"
             if key == 'sql':              return ie(f"{ref('mql')}*{bm('mql_to_sql')}")
             if key == 'cost_per_sql':     return ie(f"{ref('Budget')}/{ref('sql')}")
+            return None
+
+        # ── LinkedIn Document Ad ──────────────────────────────────────────────
+        if ch == 'LinkedIn' and li_fmt == 'Document Ad':
+            if key == 'impressions':          return ie(f"{ref('Budget')}/{bm('cpm')}*1000")
+            if key == 'eff_cpm':              return ie(f"{ref('Budget')}/{ref('impressions')}*1000")
+            if key == 'clicks':               return ie(f"{ref('impressions')}*{bm('ctr')}")
+            if key == 'ctr':                  return ie(f"{ref('clicks')}/{ref('impressions')}")
+            if key == 'doc_views':            return ie(f"{ref('clicks')}*{bm('doc_open_rate')}")
+            if key == 'doc_open_rate':        return f"={bm('doc_open_rate')}"
+            if key == 'doc_completions':      return ie(f"{ref('doc_views')}*{bm('doc_completion_rate')}")
+            if key == 'doc_completion_rate':  return f"={bm('doc_completion_rate')}"
+            if key == 'conv_rate':            return f"={bm('conv_rate')}"
+            if key == 'conversions':          return ie(f"{ref('doc_completions')}*{bm('conv_rate')}")
+            if key == 'cpa':                  return ie(f"{ref('Budget')}/{ref('conversions')}")
+            if key == 'lead_to_mql':          return f"={bm('lead_to_mql')}"
+            if key == 'mql':                  return ie(f"{ref('conversions')}*{bm('lead_to_mql')}")
+            if key == 'cost_per_mql':         return ie(f"{ref('Budget')}/{ref('mql')}")
+            if key == 'mql_to_sql':           return f"={bm('mql_to_sql')}"
+            if key == 'sql':                  return ie(f"{ref('mql')}*{bm('mql_to_sql')}")
+            if key == 'cost_per_sql':         return ie(f"{ref('Budget')}/{ref('sql')}")
             return None
 
         # ── LinkedIn Lead Gen Form ─────────────────────────────────────────────
@@ -1384,8 +1566,13 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
         _rate_keys_sm  = ('open_rate', 'conv_rate', 'lead_to_mql', 'mql_to_sql')
         _rate_keys_lgf = ('form_completion_rate', 'lead_to_mql', 'mql_to_sql')
         _rate_keys_std = ('click_to_session', 'conv_rate', 'lead_to_mql', 'mql_to_sql')
-        if ch == 'LinkedIn' and li_fmt == 'Sponsored Message / Conversational Ad':
+        if ch == 'LinkedIn' and li_fmt in (
+                'Sponsored Message / Conversational Ad', 'Conversation Ad'):
             if key in _rate_keys_sm:
+                return f"={bm_map.get(key, '0')}"
+        elif ch == 'LinkedIn' and li_fmt == 'Document Ad':
+            _rate_keys_da = ('doc_open_rate', 'doc_completion_rate', 'conv_rate', 'lead_to_mql', 'mql_to_sql')
+            if key in _rate_keys_da:
                 return f"={bm_map.get(key, '0')}"
         elif ch == 'LinkedIn' and li_fmt == 'Lead Gen Form':
             if key in _rate_keys_lgf:
@@ -1467,6 +1654,12 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
                     if ch == 'LinkedIn' and li_fmt == 'Sponsored Message / Conversational Ad':
                         phase_key = ('LinkedIn_SM', goal)
                         bm_params_key = ('LinkedIn_SM', goal)
+                    elif ch == 'LinkedIn' and li_fmt == 'Conversation Ad':
+                        phase_key = ('LinkedIn_CA', goal)
+                        bm_params_key = ('LinkedIn_CA', goal)
+                    elif ch == 'LinkedIn' and li_fmt == 'Document Ad':
+                        phase_key = ('LinkedIn_DA', goal)
+                        bm_params_key = ('LinkedIn_DA', goal)
                     elif ch == 'LinkedIn' and li_fmt == 'Lead Gen Form':
                         phase_key = ('LinkedIn_LGF', goal)
                         bm_params_key = ('LinkedIn_LGF', goal)
@@ -1599,8 +1792,11 @@ def _build_excel_all(all_scenarios, scenario_ids, campaign_name, start_date, end
                 n_ch_cols = len(ckeys) + 1
 
                 # Choose the right rate derivation map for this format
-                if ch == 'LinkedIn' and li_fmt == 'Sponsored Message / Conversational Ad':
+                if ch == 'LinkedIn' and li_fmt in (
+                        'Sponsored Message / Conversational Ad', 'Conversation Ad'):
                     rate_from = _RATE_FROM_SM
+                elif ch == 'LinkedIn' and li_fmt == 'Document Ad':
+                    rate_from = _RATE_FROM_DA
                 elif ch == 'LinkedIn' and li_fmt == 'Lead Gen Form':
                     rate_from = _RATE_FROM_LGF
                 else:
