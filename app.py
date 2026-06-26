@@ -64,6 +64,59 @@ st.markdown("""
         max-width: 200px !important;
         object-fit: contain !important;
     }
+
+    /* ── Mobile responsiveness ──────────────────────────────────────────── */
+    @media (max-width: 768px) {
+        .block-container { padding-top: 1.5rem !important; padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+
+        /* st.columns has no native responsive stacking — force it below this
+           breakpoint, since the multi-column layouts (budget splits, KPI
+           tables, metric rows) are unreadable squeezed into a phone width. */
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+        }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+            min-width: 100% !important;
+            flex: 1 1 100% !important;
+            width: 100% !important;
+        }
+
+        /* Tables/dataframes are the one thing that should still scroll
+           horizontally rather than stack — they don't live inside columns
+           in a way the rule above breaks, but make the scroll affordance
+           obvious with a visible scrollbar track. */
+        div[data-testid="stDataFrame"], div[data-testid="stTable"] {
+            overflow-x: auto !important;
+        }
+
+        /* Tabs can overflow a phone screen with many tabs — let them scroll
+           horizontally instead of wrapping into a multi-row mess. */
+        div[data-testid="stTabs"] div[role="tablist"] {
+            overflow-x: auto !important;
+            flex-wrap: nowrap !important;
+            -webkit-overflow-scrolling: touch;
+        }
+        div[data-testid="stTabs"] button[role="tab"] {
+            flex-shrink: 0 !important;
+        }
+
+        /* Bigger tap targets and full-width primary actions on small screens */
+        div.stButton > button, div.stDownloadButton > button {
+            width: 100% !important;
+            min-height: 2.75rem !important;
+            font-size: 0.95rem !important;
+        }
+        input, textarea, select { min-height: 2.5rem !important; }
+
+        h1 { font-size: 1.5rem !important; }
+        h2 { font-size: 1.25rem !important; }
+        h3 { font-size: 1.1rem !important; }
+
+        /* Metrics (heavily used for budget/KPI display) need smaller type
+           and tighter spacing to avoid wrapping awkwardly on narrow screens */
+        div[data-testid="stMetric"] { padding: 0.4rem 0 !important; }
+        div[data-testid="stMetricValue"] { font-size: 1.3rem !important; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
